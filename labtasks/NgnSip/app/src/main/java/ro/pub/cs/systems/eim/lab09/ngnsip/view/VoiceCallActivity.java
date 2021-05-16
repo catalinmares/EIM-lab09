@@ -1,7 +1,11 @@
 package ro.pub.cs.systems.eim.lab09.ngnsip.view;
 
+import android.Manifest;
 import android.content.Intent;
 import android.content.IntentFilter;
+import android.content.pm.PackageManager;
+import android.os.Build;
+import android.support.annotation.NonNull;
 import android.support.v7.app.AppCompatActivity;
 import android.os.Bundle;
 import android.util.Log;
@@ -9,8 +13,12 @@ import android.view.View;
 import android.widget.Button;
 import android.widget.EditText;
 import android.widget.TextView;
+import android.widget.Toast;
 
 import org.doubango.ngn.NgnEngine;
+import org.doubango.ngn.events.NgnInviteEventArgs;
+import org.doubango.ngn.events.NgnRegistrationEventArgs;
+import org.doubango.ngn.media.NgnMediaType;
 import org.doubango.ngn.services.INgnConfigurationService;
 import org.doubango.ngn.services.INgnSipService;
 import org.doubango.ngn.sip.NgnAVSession;
@@ -23,6 +31,7 @@ import ro.pub.cs.systems.eim.lab09.ngnsip.broadcastreceiver.VoiceCallBroadcastRe
 import ro.pub.cs.systems.eim.lab09.ngnsip.general.Constants;
 
 public class VoiceCallActivity extends AppCompatActivity {
+    private static final int PERMISSIONS_REQUEST_READ_CONTACTS = 100;
 
     private NgnEngine ngnEngine = null;
     private INgnSipService ngnSipService = null;
@@ -55,31 +64,36 @@ public class VoiceCallActivity extends AppCompatActivity {
         return instance;
     }
 
-    private RegistrationButtonClickListener registrationButtonClickListener = new RegistrationButtonClickListener();
+    private final RegistrationButtonClickListener registrationButtonClickListener = new RegistrationButtonClickListener();
     private class RegistrationButtonClickListener implements Button.OnClickListener {
 
         @Override
         public void onClick(View view) {
-            // TODO exercise 5a
-            // - set the NGN engine parameters via the configureStack() method
-            // - start the NGN engine and register the activity to the SIP service
-            // invoke the startNgnEngine() and registerSipService() methods respectively
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && checkSelfPermission(Manifest.permission.READ_CONTACTS) != PackageManager.PERMISSION_GRANTED) {
+                requestPermissions(new String[]{Manifest.permission.READ_CONTACTS}, PERMISSIONS_REQUEST_READ_CONTACTS);
+            } else {
+                configureStack();
+
+                if (!startNgnEngine())
+                    return;
+
+                registerSipService();
+            }
         }
 
     }
 
-    private UnregisterButtonClickListener unregisterButtonClickListener = new UnregisterButtonClickListener();
+    private final UnregisterButtonClickListener unregisterButtonClickListener = new UnregisterButtonClickListener();
     private class UnregisterButtonClickListener implements Button.OnClickListener {
 
         @Override
         public void onClick(View view) {
-            // TODO exercise 5b
-            // unregister the SIP service by invoking the unregisterSipService() method
+            unregisterSipService();
         }
 
     }
 
-    private MakeCallButtonClickListener makeCallButtonClickListener = new MakeCallButtonClickListener();
+    private final MakeCallButtonClickListener makeCallButtonClickListener = new MakeCallButtonClickListener();
     private class MakeCallButtonClickListener implements Button.OnClickListener {
 
         @Override
@@ -94,49 +108,65 @@ public class VoiceCallActivity extends AppCompatActivity {
                 return;
             }
 
-            // TODO exercise 7a
-            // - create a NgnAVSession by invoking the static method createOutgoingSession
-            // passing as arguments the SipStack and the media type (NgnMediaType.Audio)
-            // - if the call can be made, set the callStatusTextView to "calling" and log the information
-            // - if the call cannot be made, log the information accordingly
-            // hint: use the makeCall() method of the NgnAVSession instance
+            ngnAVSession = NgnAVSession.createOutgoingSession(
+                    NgnEngine.getInstance().getSipService().getSipStack(),
+                    NgnMediaType.Audio
+            );
 
+            if (ngnAVSession.makeCall(validUri)) {
+                callStatusTextView.setText(getResources().getString(R.string.calling));
+                Log.d(Constants.TAG, "Call succeeded");
+            } else {
+                Log.d(Constants.TAG, "Call failed");
+            }
         }
     }
 
-    private HangupCallButtonClickListener hangupCallButtonClickListener = new HangupCallButtonClickListener();
+    private final HangupCallButtonClickListener hangupCallButtonClickListener = new HangupCallButtonClickListener();
     private class HangupCallButtonClickListener implements Button.OnClickListener {
 
         @Override
         public void onClick(View viw) {
-
-            // TODO exercise 7b
-            // this method should check whether the NgnAVSession was previously created
-            // hint: use the hangUpCall() method of the NgnAVSession instance
-
-        }
-
-    }
-
-    private DTMFButtonClickListener dtmfButtonClickListener = new DTMFButtonClickListener();
-    private class DTMFButtonClickListener implements Button.OnClickListener {
-
-        @Override
-        public void onClick(View view) {
             if (ngnAVSession != null) {
-
-                // TODO exercise 10
-                // - get the character from the DTMF edit text
-                // - compute the character code (0-9 for digits, 10 for '*', 11 for '#')
-                // - use the sendDTMF() method of the NgnAVSession instance
-                // - log the result using Logcat
-
+                ngnAVSession.hangUpCall();
+                Log.d(Constants.TAG, "Hang Up");
             }
         }
 
     }
 
-    private ChatButtonClickListener chatButtonClickListener = new ChatButtonClickListener();
+    private final DTMFButtonClickListener dtmfButtonClickListener = new DTMFButtonClickListener();
+    private class DTMFButtonClickListener implements Button.OnClickListener {
+
+        @Override
+        public void onClick(View view) {
+            if (ngnAVSession != null) {
+                int character = dtmfEditText.getText().toString().charAt(0);
+
+                switch (character) {
+                    case '*':
+                        character = 10;
+                        break;
+                    case '#':
+                        character = 11;
+                        break;
+                    default:
+                        if (character >= '0' && character < '9') {
+                            character -= '0';
+                        }
+                }
+
+                if (!ngnAVSession.sendDTMF(character)) {
+                    Log.e(Constants.TAG, "Failed to send DTMF " + character);
+                } else {
+                    Log.d(Constants.TAG, "Succeeded to send DTMF " + character);
+                }
+            }
+        }
+
+    }
+
+    private final ChatButtonClickListener chatButtonClickListener = new ChatButtonClickListener();
     private class ChatButtonClickListener implements Button.OnClickListener {
 
         @Override
@@ -161,24 +191,24 @@ public class VoiceCallActivity extends AppCompatActivity {
         }
         ngnSipService = ngnEngine.getSipService();
 
-        registerButton = (Button)findViewById(R.id.register_button);
+        registerButton = findViewById(R.id.register_button);
         registerButton.setOnClickListener(registrationButtonClickListener);
-        unregisterButton = (Button)findViewById(R.id.unregister_button);
+        unregisterButton = findViewById(R.id.unregister_button);
         unregisterButton.setOnClickListener(unregisterButtonClickListener);
-        registrationStatusTextView = (TextView)findViewById(R.id.registration_status_text_view);
+        registrationStatusTextView = findViewById(R.id.registration_status_text_view);
 
-        SIPAddressEditText = (EditText)findViewById(R.id.SIP_address_edit_text);
-        makeCallButton = (Button)findViewById(R.id.make_call_button);
+        SIPAddressEditText = findViewById(R.id.SIP_address_edit_text);
+        makeCallButton = findViewById(R.id.make_call_button);
         makeCallButton.setOnClickListener(makeCallButtonClickListener);
-        hangUpCallButton = (Button)findViewById(R.id.hang_up_call_button);
+        hangUpCallButton = findViewById(R.id.hang_up_call_button);
         hangUpCallButton.setOnClickListener(hangupCallButtonClickListener);
-        callStatusTextView = (TextView)findViewById(R.id.call_status_text_view);
+        callStatusTextView = findViewById(R.id.call_status_text_view);
 
-        dtmfButton = (Button)findViewById(R.id.dtmf_button);
+        dtmfButton = findViewById(R.id.dtmf_button);
         dtmfButton.setOnClickListener(dtmfButtonClickListener);
-        dtmfEditText = (EditText)findViewById(R.id.dtmf_edit_text);
+        dtmfEditText = findViewById(R.id.dtmf_edit_text);
 
-        chatButton = (Button)findViewById(R.id.chat_button);
+        chatButton = findViewById(R.id.chat_button);
         chatButton.setOnClickListener(chatButtonClickListener);
 
         enableRegistrationBroadcastReceiver();
@@ -235,35 +265,25 @@ public class VoiceCallActivity extends AppCompatActivity {
     }
 
     public void enableRegistrationBroadcastReceiver() {
-
-        // TODO exercise 6a
-        // - create a RegistrationBroadcastReceiver instance
-        // - create an IntentFilter instance for NgnRegistrationEventArgs.ACTION_REGISTRATION_EVENT action
-        // - register the broadcast intent with the intent filter
-
+        registrationBroadcastReceiver = new RegistrationBroadcastReceiver(registrationStatusTextView);
+        registrationIntentFilter = new IntentFilter();
+        registrationIntentFilter.addAction(NgnRegistrationEventArgs.ACTION_REGISTRATION_EVENT);
+        registerReceiver(registrationBroadcastReceiver, registrationIntentFilter);
     }
 
     public void disableRegistrationStateBroadcastReceiver() {
-
-        // TODO exercise 6b
-        // unregister the RegistrationBroadcastReceiver instance
-
+        unregisterReceiver(registrationBroadcastReceiver);
     }
 
     public void enableVoiceCallBroadcastReceiver() {
-
-        // TODO exercise 8a
-        // - create a VoiceCallBroadcastReceiver instance
-        // - create an IntentFilter instance for NgnInviteEventArgs.ACTION_INVITE_EVENT action
-        // - register the broadcast receiver with the intent filter
-
+        voiceCallBroadcastReceiver = new VoiceCallBroadcastReceiver(SIPAddressEditText, callStatusTextView);
+        voiceCallIntentFilter = new IntentFilter();
+        voiceCallIntentFilter.addAction(NgnInviteEventArgs.ACTION_INVITE_EVENT);
+        registerReceiver(voiceCallBroadcastReceiver, voiceCallIntentFilter);
     }
 
     public void disableVoiceCallBroadcastReceiver() {
-
-        // TODO exercise 8b
-        // unregister the VoiceCallBroadcastReceiver instance
-
+        unregisterReceiver(voiceCallBroadcastReceiver);
     }
 
     @Override
@@ -289,5 +309,21 @@ public class VoiceCallActivity extends AppCompatActivity {
 
     public INgnSipService getNgnSipService() {
         return ngnSipService;
+    }
+
+    @Override
+    public void onRequestPermissionsResult(int requestCode, @NonNull @org.jetbrains.annotations.NotNull String[] permissions, @NonNull @org.jetbrains.annotations.NotNull int[] grantResults) {
+        if (requestCode == PERMISSIONS_REQUEST_READ_CONTACTS) {
+            if (grantResults[0] == PackageManager.PERMISSION_GRANTED) {
+                configureStack();
+
+                if (!startNgnEngine())
+                    return;
+
+                registerSipService();
+            } else {
+                Toast.makeText(this, "Missing permissions", Toast.LENGTH_LONG).show();
+            }
+        }
     }
 }
